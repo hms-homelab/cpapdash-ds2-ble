@@ -116,6 +116,38 @@ each stream after its stored bookmark and walks from the oldest record only on
 its very first read; the machine has been seen to answer a bare open of the
 events stream with "none" after another reader had read it.
 
+### The read file (`.ds2r`)
+
+When one device walks the streams and another keeps the bookmarks (a reader
+next to the machine, a service far from it), the reader hands back one file
+per request. `ReadFile.h` reads and writes it.
+
+```
+"DS2R" | version u8 = 1
+then items:  kind u8 | len u32 LE | payload[len]
+  0x01 ANSWER      cmd u16 BE | sub u8 | status u8 | data       one per identity request
+  0x02 RECORD      stream u8 | session u32 BE | bookmark[10] | body
+  0x03 STREAM_END  stream u8 | how u8 | records u16 LE | bookmark[10]
+  0x04 END         result u8 | more u8 | status u8
+```
+
+Each RECORD carries the bookmark that resumes after it and is written only
+once its body is whole, so a requestor can store a record and advance that
+stream's bookmark together, and a read cut short still advances exactly as
+far as what arrived. STREAM_END `how` is 0 (the open answered all zero), 6
+(nothing after the bookmark) or 0xFF (stopped by the reader's cap or a
+failure). `parseReadFile()` refuses a file whose items do not add up, so
+nothing of it is stored; `machineSerial()`, `model()`, `firmware()` and
+`newestSession()` read the identity answers.
+
+```cpp
+#include "cpapdash/ds2ble/ReadFile.h"
+
+const ReadFile f = parseReadFile(bytes);         // throws ReadFileError
+for (const ReadRecord& r : f.records)
+    store(f.machineSerial(), r.stream, r.session, r.body, r.bookmark);
+```
+
 ## Tests
 
 ```bash

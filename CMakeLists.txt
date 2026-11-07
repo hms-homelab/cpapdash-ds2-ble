@@ -11,6 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(cpapdash_ds2_ble STATIC
     src/Frame.cpp
+    src/ReadFile.cpp
     src/Record.cpp
     src/SyncSession.cpp
 )
@@ -59,6 +60,7 @@ if(CPAPDASH_DS2_BLE_BUILD_TESTS)
 
     add_executable(ds2ble_tests
         tests/test_frame.cpp
+        tests/test_read_file.cpp
         tests/test_record.cpp
         tests/test_sync.cpp
         tests/test_capture.cpp
