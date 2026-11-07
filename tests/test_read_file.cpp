@@ -159,11 +159,89 @@ TEST(ReadFile, RefusesItemsTooShortForTheirKind) {
     }
 }
 
-TEST(ReadFile, RefusesAnUnknownKindAStreamOutOfRangeAndItemsAfterEnd) {
-    Bytes unknown = header();
-    item(unknown, 0x09, {0x00});
-    EXPECT_THROW(parseReadFile(unknown), ReadFileError);
+TEST(ReadFile, AnUnknownKindIsSkippedNotRefused) {
+    // A newer reader's item: the reader of an older version reads past it.
+    Bytes f = header();
+    item(f, 0x02, record(1, 256, bookmark(0x10), {0xAA}));
+    item(f, 0x09, {0x01, 0x02, 0x03});
+    item(f, 0x09, {});
+    item(f, 0x02, record(1, 257, bookmark(0x11), {0xBB}));
+    item(f, 0x04, {0x00, 0x00, 0x00});
+    const ReadFile r = parseReadFile(f);
+    ASSERT_EQ(r.records.size(), 2u);
+    EXPECT_EQ(r.records[1].session, 257u);
+    EXPECT_EQ(r.skipped_items, 2u);
+    EXPECT_TRUE(r.end.has_value());
 
+    // Skipped, but still bounded: a cut-short unknown item is still refused.
+    Bytes cut = header();
+    cut.push_back(0x09);
+    for (uint8_t b : {0x10, 0x00, 0x00, 0x00, 0x01}) cut.push_back(b);
+    EXPECT_THROW(parseReadFile(cut), ReadFileError);
+}
+
+namespace {
+
+Bytes sealed(uint8_t stream, uint32_t session, const Bytes& bm, const std::string& path,
+             const Bytes& card) {
+    Bytes p{stream, static_cast<uint8_t>(session >> 24), static_cast<uint8_t>(session >> 16),
+            static_cast<uint8_t>(session >> 8), static_cast<uint8_t>(session)};
+    p.insert(p.end(), bm.begin(), bm.end());
+    p.push_back(static_cast<uint8_t>(path.size()));
+    p.insert(p.end(), path.begin(), path.end());
+    p.insert(p.end(), card.begin(), card.end());
+    return p;
+}
+
+}  // namespace
+
+TEST(ReadFile, ASealedItemIsReadBesideItsRecord) {
+    // card "both": RECORD then SEALED per record; then the card-level files
+    // as stream 0. The card bytes are opaque here (made up).
+    Bytes f = header();
+    item(f, 0x02, record(1, 256, bookmark(0x10), {0xAA, 0xBB}));
+    item(f, 0x05, sealed(1, 256, bookmark(0x10), "P0/00000100.B01", Bytes(7, 0xC5)));
+    item(f, 0x05, sealed(3, 0, bookmark(0x30), "D/000.B03", {0x01}));
+    item(f, 0x05, sealed(0, 0, Bytes(10, 0), "PROP.BIN", {0x02, 0x03}));
+    item(f, 0x04, {0x00, 0x00, 0x00});
+    const ReadFile r = parseReadFile(f);
+    ASSERT_EQ(r.records.size(), 1u);
+    ASSERT_EQ(r.sealed.size(), 3u);
+    EXPECT_EQ(r.skipped_items, 0u);
+    EXPECT_EQ(r.sealed[0].stream, 1);
+    EXPECT_EQ(r.sealed[0].session, 256u);
+    EXPECT_EQ(r.sealed[0].bookmark, bookmark(0x10));
+    EXPECT_EQ(r.sealed[0].path, "P0/00000100.B01");
+    EXPECT_EQ(r.sealed[0].card, Bytes(7, 0xC5));
+    EXPECT_EQ(r.sealed[1].path, "D/000.B03");
+    EXPECT_EQ(r.sealed[2].stream, 0) << "the card-level files are stream 0";
+    EXPECT_EQ(r.sealed[2].path, "PROP.BIN");
+
+    // The writer gives it back.
+    const ReadFile g = parseReadFile(writeReadFile(r));
+    ASSERT_EQ(g.sealed.size(), 3u);
+    EXPECT_EQ(g.sealed[0].path, r.sealed[0].path);
+    EXPECT_EQ(g.sealed[0].card, r.sealed[0].card);
+    EXPECT_EQ(g.sealed[2].bookmark, Bytes(10, 0));
+}
+
+TEST(ReadFile, RefusesASealedItemThatDoesNotAddUp) {
+    Bytes short_head = header();
+    item(short_head, 0x05, Bytes(15, 0x01));   // no path length
+    EXPECT_THROW(parseReadFile(short_head), ReadFileError);
+
+    Bytes long_path = header();
+    Bytes p = sealed(1, 1, bookmark(1), "P0/x", {});
+    p[15] = 200;                                // a path past the item's end
+    item(long_path, 0x05, p);
+    EXPECT_THROW(parseReadFile(long_path), ReadFileError);
+
+    Bytes bad_stream = header();
+    item(bad_stream, 0x05, sealed(5, 1, bookmark(1), "P0/x", {0x01}));
+    EXPECT_THROW(parseReadFile(bad_stream), ReadFileError);
+}
+
+TEST(ReadFile, RefusesAStreamOutOfRangeAndItemsAfterEnd) {
     for (uint8_t stream : {uint8_t{0}, uint8_t{5}}) {
         Bytes f = header();
         item(f, 0x02, record(stream, 1, bookmark(1), {0x01}));

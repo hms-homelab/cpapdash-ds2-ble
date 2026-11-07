@@ -129,7 +129,14 @@ then items:  kind u8 | len u32 LE | payload[len]
   0x02 RECORD      stream u8 | session u32 BE | bookmark[10] | body
   0x03 STREAM_END  stream u8 | how u8 | records u16 LE | bookmark[10]
   0x04 END         result u8 | more u8 | status u8
+  0x05 SEALED      stream u8 | session u32 BE | bookmark[10] | path_len u8 | path | card file
 ```
+
+A SEALED item is a record's file as the machine itself writes it to a card,
+at `path` under the card's machine folder (stream 0 for the card-level files),
+after its RECORD or instead of it; this library hands its bytes over unopened
+(`ReadFile::sealed`). An item of a kind a version does not know is skipped
+(`skipped_items`), so a newer reader's file still parses.
 
 Each RECORD carries the bookmark that resumes after it and is written only
 once its body is whole, so a requestor can store a record and advance that

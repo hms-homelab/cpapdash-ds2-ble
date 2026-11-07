@@ -126,8 +126,27 @@ ReadFile parseReadFile(const uint8_t* data, size_t size) {
                 f.end = ReadEnd{p[0], p[1] != 0, p[2]};
                 break;
             }
+            case ReadItemKind::Sealed: {
+                constexpr size_t kHead = 5 + kBookmarkSize + 1;   // stream, session, bookmark, path_len
+                if (len < kHead) throw ReadFileError("SEALED shorter than its header");
+                ReadSealed s;
+                s.stream = p[0];
+                if (s.stream > 4)
+                    throw ReadFileError("SEALED: stream " + std::to_string(s.stream) +
+                                        " is not 0..4");
+                s.session = u32be(p + 1);
+                s.bookmark.assign(p + 5, p + 5 + kBookmarkSize);
+                const size_t path_len = p[5 + kBookmarkSize];
+                if (path_len > len - kHead) throw ReadFileError("SEALED path past its item");
+                s.path.assign(reinterpret_cast<const char*>(p + kHead), path_len);
+                s.card.assign(p + kHead + path_len, p + len);
+                f.sealed.push_back(std::move(s));
+                break;
+            }
             default:
-                throw ReadFileError("unknown item kind " + std::to_string(kind));
+                // A newer reader's kind: read past it (its length is known).
+                ++f.skipped_items;
+                break;
         }
     }
     return f;
@@ -154,6 +173,18 @@ std::vector<uint8_t> writeReadFile(const ReadFile& file) {
         putBookmark(p, r.bookmark);
         p.insert(p.end(), r.body.begin(), r.body.end());
         putItem(out, ReadItemKind::Record, p);
+    }
+    for (const auto& s : file.sealed) {
+        if (s.path.size() > 255) throw ReadFileError("SEALED path over 255 bytes");
+        std::vector<uint8_t> p{s.stream, static_cast<uint8_t>(s.session >> 24),
+                               static_cast<uint8_t>(s.session >> 16),
+                               static_cast<uint8_t>(s.session >> 8),
+                               static_cast<uint8_t>(s.session)};
+        putBookmark(p, s.bookmark);
+        p.push_back(static_cast<uint8_t>(s.path.size()));
+        p.insert(p.end(), s.path.begin(), s.path.end());
+        p.insert(p.end(), s.card.begin(), s.card.end());
+        putItem(out, ReadItemKind::Sealed, p);
     }
     for (const auto& e : file.stream_ends) {
         std::vector<uint8_t> p{e.stream, e.how, static_cast<uint8_t>(e.records),

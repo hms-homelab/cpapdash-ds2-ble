@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(cpapdash_ds2_ble VERSION 0.1.0 LANGUAGES CXX)
+project(cpapdash_ds2_ble VERSION 0.1.1 LANGUAGES CXX)
 
 # Reading a Philips DreamStation 2 over Bluetooth LE: the frames, the commands
 # and the record walk. No radio code: a caller hands in the bytes the machine

@@ -26,6 +26,17 @@ namespace cpapdash::ds2ble {
  *     0x02 RECORD      stream u8 | session u32 BE | bookmark[10] | body
  *     0x03 STREAM_END  stream u8 | how u8 | records u16 LE | bookmark[10]
  *     0x04 END         result u8 | more u8 | status u8
+ *     0x05 SEALED      stream u8 | session u32 BE | bookmark[10] | path_len u8 | path | card file
+ *
+ * A SEALED item is a record's file as the machine itself would write it to a
+ * card (header and ciphertext), placed at `path` under the card's machine
+ * folder: after its RECORD, or instead of it, as the request asked. Stream 0
+ * carries the card-level files (PROP.BIN, LOG.SEQ). This library does not
+ * open it; it hands the bytes over as they are.
+ *
+ * An item of a kind this version does not know is SKIPPED (counted in
+ * `skipped_items`), so a newer reader's file still yields everything this
+ * version understands. Its length must still fit the file.
  *
  * A RECORD is written only once its body is whole and the bookmark that
  * resumes AFTER it is in hand, so every record in a file is complete and its
@@ -40,7 +51,9 @@ namespace cpapdash::ds2ble {
 
 inline constexpr uint8_t kReadFileVersion = 1;
 
-enum class ReadItemKind : uint8_t { Answer = 0x01, Record = 0x02, StreamEnd = 0x03, End = 0x04 };
+enum class ReadItemKind : uint8_t {
+    Answer = 0x01, Record = 0x02, StreamEnd = 0x03, End = 0x04, Sealed = 0x05
+};
 
 /// STREAM_END `how`.
 inline constexpr uint8_t kStreamEndAllZero = 0x00;
@@ -74,6 +87,15 @@ struct ReadStreamEnd {
     bool reachedEnd() const { return how == kStreamEndAllZero || how == kStreamEndNothingAfter; }
 };
 
+/// One record's card file, sealed as the machine writes it (see above).
+struct ReadSealed {
+    uint8_t stream = 0;         ///< 0 for a card-level file, else 1..4
+    uint32_t session = 0;
+    Bookmark bookmark;          ///< always kBookmarkSize bytes
+    std::string path;           ///< under P-SERIES/<machine folder>/, at most 255 bytes
+    std::vector<uint8_t> card;  ///< the file's bytes, as they would sit on the card
+};
+
 struct ReadEnd {
     uint8_t result = 0;
     bool more = false;
@@ -85,7 +107,9 @@ struct ReadFile {
     std::vector<ReadAnswer> answers;
     std::vector<ReadRecord> records;
     std::vector<ReadStreamEnd> stream_ends;
+    std::vector<ReadSealed> sealed;
     std::optional<ReadEnd> end;   ///< absent when the file stops before END
+    size_t skipped_items = 0;     ///< items of a kind this version does not know
 
     /// The first answer to (command, sub) with status 0, or nullptr.
     const ReadAnswer* answer(uint16_t command, uint8_t sub) const;
@@ -109,15 +133,17 @@ public:
 
 /**
  * Parse a read file. Throws ReadFileError on the wrong magic or version, an
- * item cut short, an item too short for its kind, an unknown kind, a stream
- * outside 1..4, or anything after END. Nothing is returned for a file that
+ * item cut short, an item too short for its kind, a record stream outside
+ * 1..4 (0..4 for SEALED), a SEALED path past its item, or anything after END.
+ * An item of an unknown kind is skipped. Nothing is returned for a file that
  * fails: a requestor stores all of it or none.
  */
 ReadFile parseReadFile(const uint8_t* data, size_t size);
 ReadFile parseReadFile(const std::vector<uint8_t>& bytes);
 
-/// The file's bytes, items in the order: answers, records, stream ends, end.
-/// For tests and tools; a parse of the result gives `file` back.
+/// The file's bytes, items in the order: answers, records, sealed, stream
+/// ends, end. For tests and tools; a parse of the result gives `file` back.
+/// Throws ReadFileError for a sealed path over 255 bytes.
 std::vector<uint8_t> writeReadFile(const ReadFile& file);
 
 }  // namespace cpapdash::ds2ble
