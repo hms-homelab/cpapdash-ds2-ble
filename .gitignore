@@ -1,0 +1,6 @@
+build*/
+.idea/
+.vscode/
+*.pklg
+*.bin
+captures/
