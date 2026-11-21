@@ -103,6 +103,12 @@ Bytes FakeMachine::answer(const Bytes& request) {
     if (f.sub == kCurOpen) {
         if (f.data.empty()) throw UnexpectedRequest("open with no stream");
         cur_stream_ = f.data[0];
+        if (after_empty_ && wants_bookmark_after_empty) {
+            after_empty_ = false;
+            cur_index_ = -1;
+            return reply(f.cmd, f.sub, kStatusNoNext);
+        }
+        after_empty_ = false;
         const Bytes bm(f.data.begin() + 1, f.data.end());
         const auto& recs = streams[cur_stream_];
         size_t next = 0;
@@ -121,6 +127,7 @@ Bytes FakeMachine::answer(const Bytes& request) {
         if (next >= recs.size()) {
             cur_index_ = -1;
             if (status06_at_end && !bm.empty()) return reply(f.cmd, f.sub, kStatusNoNext);
+            after_empty_ = cur_stream_ != 0;
             return reply(f.cmd, f.sub, 0, Bytes(12, 0));
         }
         cur_index_ = static_cast<long>(next);
@@ -142,8 +149,10 @@ Bytes FakeMachine::answer(const Bytes& request) {
         return reply(f.cmd, f.sub, 0, Bytes(body.begin() + static_cast<long>(from), body.begin() + static_cast<long>(to)));
     }
     if (f.sub == kCurBookmark) {
+        after_empty_ = false;
         if (cur_stream_ == 0) return reply(f.cmd, f.sub, 0, bookmarkFor(0, 0));
-        if (cur_index_ < 0) throw UnexpectedRequest("bookmark with no record open");
+        // After an empty open: a bookmark that is no record's (hms-cpap#99).
+        if (cur_index_ < 0) return reply(f.cmd, f.sub, 0, bookmarkFor(cur_stream_, 0xFFFF));
         return reply(f.cmd, f.sub, 0, bookmarkFor(cur_stream_, static_cast<size_t>(cur_index_)));
     }
     throw UnexpectedRequest("fake does not know " + toHex(request));

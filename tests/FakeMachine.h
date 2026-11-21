@@ -31,6 +31,10 @@ public:
     };
     std::map<uint8_t, std::vector<Rec>> streams;
     bool status06_at_end = false;
+    /// The real DS2's habit (hms-cpap#99): after an open answers the all-zero header,
+    /// the next open is answered with status 06, records or not, unless a
+    /// bookmark request came in between.
+    bool wants_bookmark_after_empty = true;
     std::optional<uint32_t> open_session;   ///< therapy running: this session is withheld
     std::string serial = "TEST0000000001";
     std::vector<uint32_t> clock_writes;     ///< set-clock values received
@@ -44,6 +48,7 @@ public:
 private:
     uint8_t cur_stream_ = 0;
     long cur_index_ = -1;   ///< the record the last open answered, -1 = none
+    bool after_empty_ = false;   ///< the last open answered all zero, no bookmark asked since
 };
 
 }  // namespace ds2test

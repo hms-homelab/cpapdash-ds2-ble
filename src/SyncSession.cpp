@@ -80,7 +80,7 @@ std::vector<uint8_t> SyncSession::handle(const Frame& f) {
         return fail("asked " + asked + ", got " + cmdName(f.cmd, f.sub));
     if (f.data.empty()) return fail(asked + ": answer has no status byte");
     const uint8_t status = f.data[0];
-    const bool open = phase_ == Phase::Open;
+    const bool open = phase_ == Phase::Open || phase_ == Phase::EndBookmark;
     if (status != kStatusOk && !(open && status == kStatusNoNext)) {
         char b[8];
         std::snprintf(b, sizeof b, "%02x", status);
@@ -129,7 +129,10 @@ std::vector<uint8_t> SyncSession::handle(const Frame& f) {
             chunks_ = u32be(d, 0);
             length_ = u32be(d, 4);
             session_ = u32be(d, 8);
-            if (chunks_ == 0 && length_ == 0 && session_ == 0) return nextStream();
+            // The end of the stream: the bookmark request comes before the next
+            // open, or the machine answers that open with status 06 (hms-cpap#99).
+            if (chunks_ == 0 && length_ == 0 && session_ == 0)
+                return request(Phase::EndBookmark, kCmdCursor, kCurBookmark);
             if (chunks_ == 0 || length_ == 0)
                 return fail("stream " + std::to_string(stream) + " header " + toHex(d) + " is not a record");
             body_.clear();
@@ -163,6 +166,9 @@ std::vector<uint8_t> SyncSession::handle(const Frame& f) {
             if (opt_.on_record) opt_.on_record(records_.back());
             return openStream();
         }
+        case Phase::EndBookmark:
+            // Not a record's bookmark: the stream keeps the one it had.
+            return nextStream();
         default:
             return fail("answer in phase " + std::to_string(static_cast<int>(phase_)));
     }

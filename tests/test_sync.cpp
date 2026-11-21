@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <map>
+
 using namespace cpapdash::ds2ble;
 using ds2test::Bytes;
 using ds2test::FakeMachine;
@@ -65,6 +67,52 @@ TEST(Sync, FirstReadWalksEveryStreamFromTheOldest) {
     EXPECT_EQ(s.bookmarks().at(3), FakeMachine::bookmarkFor(3, 0));
     EXPECT_EQ(s.bookmarks().at(0), FakeMachine::bookmarkFor(0, 0));
     EXPECT_EQ(m.oldest_opens, 5);   // stream 0 and the four record streams, once each
+}
+
+// hms-cpap#99: after an open answers the all-zero header, the DS2 answers the next
+// open with status 06 unless a bookmark request came first. Without it the
+// events (stream 2) and the second log (stream 4) never came.
+TEST(Sync, AnEmptyOpenIsFollowedByABookmarkRequestSoTheNextStreamIsServed) {
+    FakeMachine m = machineWith(3);
+    ASSERT_TRUE(m.wants_bookmark_after_empty);
+    SyncSession s = read(m);
+    ASSERT_TRUE(s.done()) << s.error();
+
+    std::map<uint8_t, int> per_stream;
+    for (const auto& r : s.records()) ++per_stream[r.stream];
+    EXPECT_EQ(per_stream, (std::map<uint8_t, int>{{1, 3}, {2, 3}, {3, 1}, {4, 1}}));
+
+    // Every all-zero open of a record stream is followed by a bookmark request.
+    int empty_opens = 0;
+    for (size_t i = 0; i + 1 < m.requests.size(); ++i) {
+        const Frame f = decode(m.requests[i]);
+        if (f.cmd != kCmdCursor || f.sub != kCurOpen || f.data.empty() || f.data[0] == 0) continue;
+        const Frame next = decode(m.requests[i + 1]);
+        if (next.sub == kCurBookmark && next.data.empty() && i + 2 < m.requests.size() &&
+            decode(m.requests[i + 2]).sub == kCurOpen && decode(m.requests[i + 2]).data[0] != f.data[0])
+            ++empty_opens;
+    }
+    EXPECT_EQ(empty_opens, 3);   // streams 1, 2 and 3 end before the next one opens
+
+    // That answer is no record's bookmark: each stream keeps its last record's.
+    EXPECT_EQ(s.bookmarks().at(1), FakeMachine::bookmarkFor(1, 2));
+    EXPECT_EQ(s.bookmarks().at(2), FakeMachine::bookmarkFor(2, 2));
+    EXPECT_EQ(s.bookmarks().at(4), FakeMachine::bookmarkFor(4, 0));
+}
+
+TEST(Sync, ResumingAfterTheLastRecordStillServesTheNextStream) {
+    FakeMachine m = machineWith(2);
+    SyncSession first = read(m);
+    ASSERT_TRUE(first.done()) << first.error();
+    m.streams[2].push_back({502, makeBlock(502, 1700000000 + 86400 * 2, 2, {{0x06, {1, 0, 9}}})});
+
+    SyncOptions o;
+    o.bookmarks = first.bookmarks();
+    SyncSession again = read(m, o);
+    ASSERT_TRUE(again.done()) << again.error();
+    ASSERT_EQ(again.records().size(), 1u);   // stream 1 is empty, stream 2 still answers
+    EXPECT_EQ(again.records()[0].stream, 2);
+    EXPECT_EQ(again.records()[0].session, 502u);
 }
 
 TEST(Sync, ResumesFromTheStoredBookmarkNeverFromTheOldest) {

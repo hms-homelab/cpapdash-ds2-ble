@@ -57,6 +57,13 @@ struct SyncOptions {
  * bookmark, open after that, until the open answers "none" (an all-zero
  * header, or status 06, both meaning nothing after the bookmark).
  *
+ * An open that answers the all-zero header is followed by a bookmark request
+ * before the next stream is opened, as the app does with stream 0 (hms-cpap#99).
+ * Without it the machine answers the next stream's open with status 06,
+ * records or not: on a real DS2 the events (stream 2) and the second log
+ * (stream 4) never came after the summaries' and the first log's walks ended.
+ * That answer is not a record's bookmark, so the stream keeps the one it had.
+ *
  * The session still being recorded is never served: during therapy every open
  * is empty, and the night arrives once the mask is off.
  */
@@ -96,7 +103,7 @@ public:
 private:
     enum class Phase {
         Idle, Serial, Commands, SetClock, Firmware, Model, Newest, Counters,
-        Stream0Open, Stream0Bookmark, Open, Chunk, Bookmark, Done, Failed,
+        Stream0Open, Stream0Bookmark, Open, Chunk, Bookmark, EndBookmark, Done, Failed,
     };
 
     std::vector<uint8_t> request(Phase next, uint16_t cmd, uint8_t sub, std::vector<uint8_t> data = {});
